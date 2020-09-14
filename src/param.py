@@ -88,6 +88,13 @@ def parse_args():
     parser.add_argument("--multiGPU", action='store_const', default=False, const=True)
     parser.add_argument("--numWorkers", dest='num_workers', default=0)
 
+    # detection model config
+    parser.add_argument("--detection_model", type=str)
+    parser.add_argument("--img_size", default=320, type=int)
+    parser.add_argument("--num_features", default=32, type=int)
+    parser.add_argument("--conf_threshold", default=0.4, type=float)
+    parser.add_argument("--iou_threshold", default=0.4, type=float)
+
     # Parse the arguments.
     args = parser.parse_args()
 

@@ -149,6 +149,7 @@ class VisualConfig(object):
         self.r_layers = r_layers
 
         self.visual_feat_dim = 2048
+        self.visual_scale_dims = [128, 256, 512]
         self.visual_pos_dim = 4
 
         self.obj_id_num = 1600
@@ -493,28 +494,52 @@ class VisualFeatEncoder(nn.Module):
         super().__init__()
         feat_dim = VISUAL_CONFIG.visual_feat_dim
         pos_dim = VISUAL_CONFIG.visual_pos_dim
-
+        scale_dims = VISUAL_CONFIG.visual_scale_dims
+        self.feat_fc = nn.ModuleList(
+            [nn.Linear(dim, config.hidden_size) for dim in scale_dims]
+        )
+        self.feat_norm = nn.ModuleList(
+            [BertLayerNorm(config.hidden_size, eps=1e-12) for _ in scale_dims]
+        )
+        self.box_fc = nn.ModuleList(
+            [nn.Linear(pos_dim, config.hidden_size) for _ in scale_dims]
+        )
+        self.box_norm = nn.ModuleList(
+            [BertLayerNorm(config.hidden_size, eps=1e-12) for _ in scale_dims]
+        )
         # Object feature encoding
-        self.visn_fc = nn.Linear(feat_dim, config.hidden_size)
-        self.visn_layer_norm = BertLayerNorm(config.hidden_size, eps=1e-12)
-
-        # Box position encoding
-        self.box_fc = nn.Linear(pos_dim, config.hidden_size)
-        self.box_layer_norm = BertLayerNorm(config.hidden_size, eps=1e-12)
+        # self.visn_fc = nn.Linear(feat_dim, config.hidden_size)
+        # self.visn_layer_norm = BertLayerNorm(config.hidden_size, eps=1e-12)
+        #
+        # # Box position encoding
+        # self.box_fc = nn.Linear(pos_dim, config.hidden_size)
+        # self.box_layer_norm = BertLayerNorm(config.hidden_size, eps=1e-12)
 
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
     def forward(self, visn_input):
         feats, boxes = visn_input
-
-        x = self.visn_fc(feats)
-        x = self.visn_layer_norm(x)
-        y = self.box_fc(boxes)
-        y = self.box_layer_norm(y)
-        output = (x + y) / 2
-
-        output = self.dropout(output)
-        return output
+        # modified to support multi scale feats and boxes
+        # e.g. feats = [8x128, 8x256, 8x512], boxes = [8x4, 8x4, 8x4]
+        outputs = []
+        for i, (feat, box) in enumerate(zip(feats, boxes)):
+            x = self.feat_fc[i](feat)
+            x = self.feat_norm[i](x)
+            y = self.box_fc[i](box)
+            y = self.box_norm[i](y)
+            output = (x + y) / 2
+            outputs.append(output)
+        outputs = torch.cat(outputs, 1)
+        outputs = self.dropout(outputs)
+        return outputs
+        # x = self.visn_fc(feats)
+        # x = self.visn_layer_norm(x)
+        # y = self.box_fc(boxes)
+        # y = self.box_layer_norm(y)
+        # output = (x + y) / 2
+        #
+        # output = self.dropout(output)
+        # return output
 
 
 class LXRTEncoder(nn.Module):
