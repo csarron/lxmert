@@ -568,26 +568,38 @@ class LXRTEncoder(nn.Module):
             [BertLayer(config) for _ in range(self.num_r_layers)]
         )
 
+    def image_encoder(self, visn_feats, visn_attention_mask):
+        visn_feats = self.visn_fc(visn_feats)
+
+        # Run relational layers
+        for layer_module in self.r_layers:
+            visn_feats = layer_module(visn_feats, visn_attention_mask)
+        return visn_feats
+
+    def ques_encoder(self, lang_feats, lang_attention_mask):
+        # Run language layers
+        for layer_module in self.layer:
+            lang_feats = layer_module(lang_feats, lang_attention_mask)
+        return lang_feats
+
+    def cross_encoder(self, lang_feats, lang_attention_mask,
+                      visn_feats, visn_attention_mask):
+        # Run cross-modality layers
+        for layer_module in self.x_layers:
+            lang_feats, visn_feats = layer_module(
+                lang_feats, lang_attention_mask, visn_feats,
+                visn_attention_mask)
+        return lang_feats, visn_feats
+
     def forward(self, lang_feats, lang_attention_mask,
                 visn_feats, visn_attention_mask=None):
         # Run visual embedding layer
         # Note: Word embedding layer was executed outside this module.
         #       Keep this design to allow loading BERT weights.
-        visn_feats = self.visn_fc(visn_feats)
-
-        # Run language layers
-        for layer_module in self.layer:
-            lang_feats = layer_module(lang_feats, lang_attention_mask)
-
-        # Run relational layers
-        for layer_module in self.r_layers:
-            visn_feats = layer_module(visn_feats, visn_attention_mask)
-
-        # Run cross-modality layers
-        for layer_module in self.x_layers:
-            lang_feats, visn_feats = layer_module(lang_feats, lang_attention_mask,
-                                                  visn_feats, visn_attention_mask)
-
+        visn_feats = self.image_encoder(visn_feats, visn_attention_mask)
+        lang_feats = self.ques_encoder(lang_feats, lang_attention_mask)
+        lang_feats, visn_feats = self.cross_encoder(
+            lang_feats, lang_attention_mask, visn_feats, visn_attention_mask)
         return lang_feats, visn_feats
 
 

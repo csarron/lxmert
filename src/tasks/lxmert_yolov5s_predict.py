@@ -59,7 +59,7 @@ class VQATorchDataset(Dataset):
         self.raw_dataset = dataset
 
         if args.tiny:
-            topk = args.tiny_num
+            topk = 10
         elif args.fast:
             topk = FAST_IMG_NUM
         else:
@@ -125,6 +125,14 @@ def get_data_tuple(splits: str, bs: int, shuffle=False,
 MAX_VQA_LENGTH = 20
 
 
+def unravel_index(index, shape):
+    out = []
+    for dim in reversed(shape):
+        out.append(index % dim)
+        index = index // dim
+    return tuple(reversed(out))
+
+
 def get_grid_index(keep_idx, x):
     dims = [xi[..., 0].numel() for xi in x]
     i = 0
@@ -134,7 +142,7 @@ def get_grid_index(keep_idx, x):
             i += 1
         else:
             break
-    return i, np.unravel_index(keep_idx, x[i][..., 0].shape)[1:]
+    return i, unravel_index(keep_idx, x[i][..., 0].shape)[1:]
 
 
 class VQAModel(nn.Module):
@@ -204,8 +212,9 @@ class VQA:
                            label2ans=self.train_tuple.dataset.label2ans)
 
         # GPU options
-        self.model = self.model.cuda()
-        self.model.detection_model = self.model.detection_model.cuda()
+        if torch.cuda.is_available():
+            self.model = self.model.half().cuda()
+            self.model.detection_model = self.model.detection_model.half().cuda()
         if args.multiGPU:
             self.model.lxrt_encoder.multi_gpu()
 
@@ -236,7 +245,7 @@ class VQA:
         img = np.ascontiguousarray(img)
         return img, img0
 
-    def _process_feature(self, img, im0, output,
+    def postprocess_feature(self, img, im0, output,
                          conf_threshold=0.3, iou_threshold=0.3,
                          num_per_scale_features=8,
                          ):
@@ -277,14 +286,15 @@ class VQA:
                     & (cls_scores[keep] > conf_thresh_tensor[keep]),
                     cls_scores[keep],
                     max_conf[keep],
-                    )
+                )
             sorted_scores, sorted_indices = torch.sort(max_conf,
                                                        descending=True)
             # TODO: use >0 to get variable boxes
             # num_boxes = (sorted_scores != 0).sum()
             # print('num_boxes: {}'.format(num_boxes))
             # keep_boxes = sorted_indices[: num_features]
-            boxes = scale_coords(img[i].shape[2:], boxes, im0[i].shape).round()
+            # print('img[i].shape', img[i].shape)
+            boxes = scale_coords(img[i].shape[1:], boxes, im0[i].shape).round()
             # Normalize the boxes (to 0 ~ 1)
             img_h, img_w = im0[i].shape[:2]
             # boxes = boxes.copy()
@@ -320,6 +330,31 @@ class VQA:
             cls_list[ns] = torch.stack(cls_list[ns])
         return feat_list, info_list
 
+    def preprocess_image(self, img_paths):
+        img_tensor, im_infos = [], []
+        for img_path in img_paths:
+            img, img0 = self._image_transform(img_path)
+            img = torch.from_numpy(img).float()
+            if torch.cuda.is_available():
+                img = img.cuda()
+                img = img.half()  # uint8 to fp16/32
+            img /= 255.0  # 0 - 255 to 0.0 - 1.0
+            # if img.ndimension() == 3:
+            #     img = img.unsqueeze(0)
+            img_tensor.append(img)
+            im_infos.append(img0)
+        image_tensor = torch.stack(img_tensor)
+        return image_tensor, im_infos
+
+    def run_detection(self, image_tensor):
+        output = self.model.detection_model(image_tensor)
+        return output
+
+    def run_vqa(self, feat_list, info_list, sent):
+        logit = self.model(feat_list, info_list, sent)
+        score, label = logit.max(1)
+        return score, label
+
     def predict(self, eval_tuple: DataTuple, dump=None):
         """
         Predict the answers to questions in a data split.
@@ -337,79 +372,76 @@ class VQA:
         # import torch.autograd.profiler as profiler
 
         start = time.time()
-        print('model set up, starting warming up prediction...')
-        count = 0
-        batches = 0
-        # with torch.no_grad(), profiler.profile(record_shapes=True) as prof:
-        with torch.no_grad():
-            for i, datum_tuple in tqdm(enumerate(loader)):
-                # :3 Avoid seeing ground truth
-                ques_id, img_paths, sent = datum_tuple[:3]
-                img_tensor, im_scales, im_infos = [], [], []
-                for img_path in img_paths:
-                    img, img0 = self._image_transform(img_path)
-                    img = torch.from_numpy(img).cuda()
-                    img = img.half()  # uint8 to fp16/32
-                    img /= 255.0  # 0 - 255 to 0.0 - 1.0
-                    if img.ndimension() == 3:
-                        img = img.unsqueeze(0)
-                    img_tensor.append(img)
-                    im_infos.append(img0)
-                image_tensor = torch.stack(img_tensor)
-                output = self.model.detection_model(image_tensor)
-
-                # get bbox and features
-                feat_list, info_list = self._process_feature(
-                    img_tensor, im_infos, output,
-                    args.conf_threshold,
-                    args.iou_threshold)
-                # feats = torch.stack(feat_list)
-                # boxes = torch.stack(info_list)
-                # feats, boxes = feats.cuda(), boxes.cuda()
-                logit = self.model(feat_list, info_list, sent)
-                score, label = logit.max(1)
-                batches += 1
-                if batches >= 2:
-                    break
+        # print('model set up, starting warming up prediction...')
+        # count = 0
+        # batches = 0
+        # # with torch.no_grad(), profiler.profile(record_shapes=True) as prof:
+        # with torch.no_grad():
+        #     for i, datum_tuple in tqdm(enumerate(loader)):
+        #         # :3 Avoid seeing ground truth
+        #         ques_id, img_paths, sent = datum_tuple[:3]
+        #         img_tensor, im_scales, im_infos = [], [], []
+        #         for img_path in img_paths:
+        #             img, img0 = self._image_transform(img_path)
+        #             img = torch.from_numpy(img).float()
+        #             if torch.cuda.is_available():
+        #                 img = img.cuda()
+        #                 img = img.half()  # uint8 to fp16/32
+        #             img /= 255.0  # 0 - 255 to 0.0 - 1.0
+        #             # if img.ndimension() == 3:
+        #             #     img = img.unsqueeze(0)
+        #             img_tensor.append(img)
+        #             im_infos.append(img0)
+        #         image_tensor = torch.stack(img_tensor)
+        #         # print(image_tensor.shape)
+        #         output = self.model.detection_model(image_tensor)
+        #
+        #         # get bbox and features
+        #         feat_list, info_list = self._process_feature(
+        #             img_tensor, im_infos, output,
+        #             args.conf_threshold,
+        #             args.iou_threshold, args.num_per_scale_features)
+        #         # feats = torch.stack(feat_list)
+        #         # boxes = torch.stack(info_list)
+        #         # feats, boxes = feats.cuda(), boxes.cuda()
+        #         logit = self.model(feat_list, info_list, sent)
+        #         score, label = logit.max(1)
+        #         batches += 1
+        #         if batches >= 2:
+        #             break
         batches = 0
         count = 0
         print('model warmed up, starting predicting...')
-        with torch.no_grad(), torchprof.Profile(self.model,
-                                                use_cuda=True) as prof:
+        # from pyinstrument import Profiler
+        # profiler = Profiler()
+        # profiler.start()
+        # torchprof.Profile(self.model, use_cuda=torch.cuda.is_available()) as prof
+        with torch.no_grad():
             for i, datum_tuple in tqdm(enumerate(loader)):
                 ques_id, img_paths, sent = datum_tuple[:3]
-                img_tensor, im_scales, im_infos = [], [], []
-                for img_path in img_paths:
-                    img, img0 = self._image_transform(img_path)
-                    img = torch.from_numpy(img).cuda()
-                    img = img.half()  # uint8 to fp16/32
-                    img /= 255.0  # 0 - 255 to 0.0 - 1.0
-                    if img.ndimension() == 3:
-                        img = img.unsqueeze(0)
-                    img_tensor.append(img)
-                    im_infos.append(img0)
-                image_tensor = torch.stack(img_tensor)
-                output = self.model.detection_model(image_tensor)
+                image_tensor, im_infos = self.preprocess_image(img_paths)
+                image_outputs = self.run_detection(image_tensor)
                 # get bbox and features
-                feat_list, info_list = self._process_feature(
-                    img_tensor, im_infos, output,
+                feat_list, info_list = self.postprocess_feature(
+                    image_tensor, im_infos, image_outputs,
                     args.conf_threshold,
-                    args.iou_threshold)
-                # feats, boxes = feats.cuda(), boxes.cuda()
-                logit = self.model(feat_list, info_list, sent)
-                score, label = logit.max(1)
+                    args.iou_threshold, args.num_per_scale_features)
+                score, label = self.run_vqa(feat_list, info_list, sent)
                 batches += 1
                 for qid, l in zip(ques_id, label.cpu().numpy()):
                     ans = dset.label2ans[l]
                     quesid2ans[qid.item()] = ans
                     count += 1
-        print(prof.display(show_events=False))
+        # print(prof.display(show_events=False))
+        # profiler.stop()
         end = time.time()
-        trace, event_lists_dict = prof.raw()
-        import pickle
-        with open(args.profile_save or 'profile.pk', 'wb') as f:
-            pickle.dump(event_lists_dict, f)
+        # trace, event_lists_dict = prof.raw()
+        # import pickle
+        # with open(args.profile_save or 'profile.pk', 'wb') as f:
+        #     pickle.dump(event_lists_dict, f)
         print('prediction finished!', end - start, batches, count)
+        # with open(args.profile_save or 'profile.html', 'w') as f:
+        #     f.write(profiler.output_html())
         if dump is not None:
             evaluator.dump_result(quesid2ans, dump)
         return quesid2ans

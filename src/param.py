@@ -2,6 +2,7 @@
 # Copyleft 2019 project LXRT.
 
 import argparse
+import os
 import random
 
 import numpy as np
@@ -35,7 +36,7 @@ def parse_args():
 
     # Data Splits
     parser.add_argument("--train", default='train')
-    parser.add_argument("--valid", default='valid')
+    parser.add_argument("--valid", default='')
     parser.add_argument("--test", default=None)
 
     # Training Hyper-parameters
@@ -90,10 +91,11 @@ def parse_args():
 
     # detection model config
     parser.add_argument("--detection_model", type=str)
+    parser.add_argument("--profile_save", type=str)
     parser.add_argument("--img_size", default=320, type=int)
-    parser.add_argument("--num_features", default=32, type=int)
-    parser.add_argument("--conf_threshold", default=0.4, type=float)
-    parser.add_argument("--iou_threshold", default=0.4, type=float)
+    parser.add_argument("--num_per_scale_features", default=8, type=int)
+    parser.add_argument("--conf_threshold", default=0.2, type=float)
+    parser.add_argument("--iou_threshold", default=0.3, type=float)
 
     # Parse the arguments.
     args = parser.parse_args()
@@ -105,7 +107,7 @@ def parse_args():
     torch.manual_seed(args.seed)
     random.seed(args.seed)
     np.random.seed(args.seed)
-
+    print('\npid={}\n\n'.format(os.getpid()))
     return args
 
 

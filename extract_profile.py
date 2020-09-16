@@ -1,6 +1,6 @@
 import pickle
 
-with open('/Users/qqcao/Downloads/tx2-vqa-profile-b1-n10.pk', 'rb') as f:
+with open('data/tx2-yolo-vqa-profile.pk', 'rb') as f:
     # The protocol version used is detected automatically, so we do not
     # have to specify it.
     prof_data = pickle.load(f)
@@ -12,10 +12,10 @@ for k, events in prof_data.items():
     timings[k] = sum([e.total_average().cuda_time_total for e in events])
 
 import csv
-with open('prof_tx2_b1_n10.csv', 'w', newline='') as f:
+with open('data/tx2-yolo-vqa-b1_n10.csv', 'w', newline='') as f:
     writer = csv.writer(f)
     for k, v in timings.items():
-        writer.writerow(['/'.join(k), v])
+        writer.writerow(['/'.join(k), v/10000])
 
 from collections import defaultdict
 breakdown = defaultdict(list)
