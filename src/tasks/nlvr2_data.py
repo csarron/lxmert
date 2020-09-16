@@ -7,7 +7,7 @@ import numpy as np
 from torch.utils.data import Dataset
 
 from param import args
-from utils import load_obj_tsv
+from data import load_obj_tsv
 
 # Load part of the dataset for fast checking.
 # Notice that here is the number of images instead of the number of data,

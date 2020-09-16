@@ -1,5 +1,3 @@
-# coding=utf-8
-# Copyleft 2019 Project LXRT
 
 import sys
 import csv
@@ -31,7 +29,7 @@ def load_obj_tsv(fname, topk=None):
 
             for key in ['img_h', 'img_w', 'num_boxes']:
                 item[key] = int(item[key])
-            
+
             boxes = item['num_boxes']
             decode_config = [
                 ('objects_id', (boxes, ), np.int64),
