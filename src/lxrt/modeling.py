@@ -523,6 +523,8 @@ class VisualFeatEncoder(nn.Module):
         # e.g. feats = [8x128, 8x256, 8x512], boxes = [8x4, 8x4, 8x4]
         outputs = []
         for i, (feat, box) in enumerate(zip(feats, boxes)):
+            if feat is None:
+                continue
             x = self.feat_fc[i](feat)
             x = self.feat_norm[i](x)
             y = self.box_fc[i](box)

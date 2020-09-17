@@ -1,30 +1,24 @@
 # coding=utf-8
 # Copyleft 2019 project LXRT.
 
-import os
 import collections
-
-import glob
-import torch.nn as nn
-
-from param import args
-from lxrt.entry import LXRTEncoder
-from lxrt.modeling import BertLayerNorm, GeLU
+import os
 
 import cv2
 import numpy as np
 import torch
-from PIL import Image
-
 import torch.nn as nn
-from torch.utils.data.dataloader import DataLoader
 from torch.utils.data import Dataset
+from torch.utils.data.dataloader import DataLoader
+from torchvision.ops.boxes import batched_nms
 
-from tqdm import tqdm
-
+from lxrt.entry import LXRTEncoder
+from lxrt.modeling import BertLayerNorm
+from lxrt.modeling import GeLU
 from param import args
 from pretrain.qa_answer_table import load_lxmert_qa
-from tasks.vqa_data import VQADataset, VQAEvaluator
+from tasks.vqa_data import VQADataset
+from tasks.vqa_data import VQAEvaluator
 from utils.datasets import letterbox
 from utils.general import scale_coords
 from utils.general import xywh2xyxy
@@ -145,6 +139,17 @@ def get_grid_index(keep_idx, x):
     return i, unravel_index(keep_idx, x[i][..., 0].shape)[1:]
 
 
+def get_scale_grid_index(keep_idx, x_shape, x_numel):
+    i = 0
+    for dim in x_numel:
+        if keep_idx >= dim:
+            keep_idx -= dim
+            i += 1
+        else:
+            break
+    return i, unravel_index(keep_idx, x_shape[i])[1:]
+
+
 class VQAModel(nn.Module):
     def __init__(self, num_answers):
         super().__init__()
@@ -255,13 +260,18 @@ class VQA:
         # x[1]: [1, 3, 16, 20, 85], features[1]: [1, 256, 16, 20]
         # x[2]: [1, 3, 8, 10, 85], features[2]: [1, 512, 8, 10]
         num_scales = len(features)
+        num_proposals = pred.shape[1]
+        num_classes = pred.shape[-1] - 5
+        batch_size = pred.shape[0]
+        device = pred.device
         """3 steps: 
         - prepare boxes and scores
         - do nms, sort boxes by keep indices
         - take either fixed number of boxes or by some threshold (variable #)
+        
+        optimization, first batch nms, second, set max 320 candidates,
+        third, improve index filtering
         """
-        batch_size = pred.shape[0]
-        num_classes = pred[0].shape[1] - 5
         feat_list = [[] for _ in range(num_scales)]
         info_list = [[] for _ in range(num_scales)]
         cls_list = [[] for _ in range(num_scales)]
@@ -271,24 +281,42 @@ class VQA:
             one_pred[:, 5:] *= one_pred[:, 4:5]  # conf = obj_conf * cls_conf
             # Box (center x, center y, width, height) to (x1, y1, x2, y2)
             boxes = xywh2xyxy(one_pred[:, :4])  # [5040, 4]
-
-            # scores = one_pred[:, 4]
-            max_conf = torch.zeros_like(one_pred[:, 4])  # [5040]
-            conf_thresh_tensor = torch.full_like(max_conf, conf_threshold)
-            start_index = 0
-            for cls_ind in range(start_index, num_classes):
-                cls_scores = one_pred[:, cls_ind + 5]  # 5040
-                keep = torch.ops.torchvision.nms(
-                    boxes, cls_scores, iou_threshold)
-                max_conf[keep] = torch.where(
-                    # Better than max one till now and minimally greater than conf_thresh
-                    (cls_scores[keep] > max_conf[keep])
-                    & (cls_scores[keep] > conf_thresh_tensor[keep]),
-                    cls_scores[keep],
-                    max_conf[keep],
-                )
-            sorted_scores, sorted_indices = torch.sort(max_conf,
-                                                       descending=True)
+            batch_boxes = boxes.unsqueeze(1).expand(
+                -1, num_classes, 4)
+            one_boxes = batch_boxes.contiguous().view(-1, 4)
+            # rows = torch.arange(batch_size, dtype=torch.long)[:, None].to(device)
+            cols = torch.arange(num_classes, dtype=torch.long)[None, :].to(device)
+            # idxs = rows * num_classes + cols
+            # idxs = idxs.expand(num_proposals, num_classes).contiguous().view(-1)
+            labels = cols.expand(num_proposals, num_classes).reshape(-1)
+            scores = one_pred[:, 5:].reshape(-1)
+            mask = scores >= conf_threshold
+            boxesf = one_boxes[mask].contiguous()
+            scoresf = scores[mask].contiguous()
+            # idxsf = idxs[mask].contiguous()
+            labelsf = labels[mask]
+            keep = batched_nms(boxesf, scoresf, labelsf, iou_threshold)
+            kept_idx = torch.nonzero(mask, as_tuple=True)[0]
+            proposal_idx, cls_idx = unravel_index(kept_idx, batch_boxes.shape[:-1])
+            proposal_idx = proposal_idx[keep]
+            cls_idx = cls_idx[keep]
+            print('conf filtered num={}, iou_num={}'.format(boxesf.shape, keep.shape))
+            # max_conf = torch.zeros_like(one_pred[:, 4])  # [5040]
+            # conf_thresh_tensor = torch.full_like(max_conf, conf_threshold)
+            # start_index = 0
+            # for cls_ind in range(start_index, num_classes):
+            #     cls_scores = one_pred[:, cls_ind + 5]  # 5040
+            #     keep = torch.ops.torchvision.nms(
+            #         boxes, cls_scores, iou_threshold)
+            #     max_conf[keep] = torch.where(
+            #         # Better than max one till now and minimally greater than conf_thresh
+            #         (cls_scores[keep] > max_conf[keep])
+            #         & (cls_scores[keep] > conf_thresh_tensor[keep]),
+            #         cls_scores[keep],
+            #         max_conf[keep],
+            #         )
+            # sorted_scores, sorted_indices = torch.sort(max_conf,
+            #                                            descending=True)
             # TODO: use >0 to get variable boxes
             # num_boxes = (sorted_scores != 0).sum()
             # print('num_boxes: {}'.format(num_boxes))
@@ -304,30 +332,38 @@ class VQA:
             feat = [[] for _ in range(num_scales)]
             bboxes = [[] for _ in range(num_scales)]
             classes = [[] for _ in range(num_scales)]
-            for keep_idx in sorted_indices:
-                one_x = [x[nsi][i] for nsi in range(num_scales)]
-                scale_idx, (dim1, dim2) = get_grid_index(keep_idx, one_x)
+            one_x = [x[nsi][i] for nsi in range(num_scales)]
+            x_numel = [xi[..., 0].numel() for xi in one_x]
+            x_shape = [xi[..., 0].shape for xi in one_x]
+            for prop_idx, c_idx in zip(proposal_idx, cls_idx):
+                scale_idx, (dim1, dim2) = get_scale_grid_index(
+                    prop_idx, x_shape, x_numel)
+                # scale_idx, (dim1, dim2) = get_grid_index(keep_idx, one_x)
                 if len(feat[scale_idx]) >= num_per_scale_features:
                     continue
                 feat_idx = features[scale_idx][i][..., dim1, dim2]
                 feat[scale_idx].append(feat_idx)
-                bbox = boxes[keep_idx]
+                bbox = boxes[prop_idx]
                 bboxes[scale_idx].append(bbox)
-                cls = one_pred[keep_idx][..., 5:].argmax()
-                classes[scale_idx].append(cls)
+                # cls = one_pred[keep_idx][..., 5:].argmax()
+                classes[scale_idx].append(c_idx)
             for ns in range(num_scales):
                 # feat[ns] = torch.stack(feat[ns], 0)
                 # classes[ns] = torch.stack(classes[ns], 0)
                 # bboxes[ns] = torch.stack(bboxes[ns], 0)
-
-                feat_list[ns].append(torch.stack(feat[ns], 0))
-                info_list[ns].append(torch.stack(bboxes[ns], 0))
-                cls_list[ns].append(torch.stack(classes[ns], 0))
+                if len(feat[ns]) > 0:
+                    feat_list[ns].append(torch.stack(feat[ns], 0))
+                    info_list[ns].append(torch.stack(bboxes[ns], 0))
             # print('size:', bbox.size(), feat.size())
         for ns in range(num_scales):
-            feat_list[ns] = torch.stack(feat_list[ns])
-            info_list[ns] = torch.stack(info_list[ns])
-            cls_list[ns] = torch.stack(cls_list[ns])
+            if len(feat_list[ns]) > 0:
+                feat_list[ns] = torch.stack(feat_list[ns])
+                info_list[ns] = torch.stack(info_list[ns])
+                print('feat_list size:', feat_list[ns].size())
+            else:
+                feat_list[ns] = None
+                info_list[ns] = None
+                print('feat_list size:', feat_list[ns])
         return feat_list, info_list
 
     def preprocess_image(self, img_paths):
@@ -368,7 +404,6 @@ class VQA:
         quesid2ans = {}
         import time
         from tqdm import tqdm
-        import torchprof
         # import torch.autograd.profiler as profiler
 
         start = time.time()

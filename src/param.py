@@ -94,8 +94,8 @@ def parse_args():
     parser.add_argument("--profile_save", type=str)
     parser.add_argument("--img_size", default=320, type=int)
     parser.add_argument("--num_per_scale_features", default=8, type=int)
-    parser.add_argument("--conf_threshold", default=0.2, type=float)
-    parser.add_argument("--iou_threshold", default=0.3, type=float)
+    parser.add_argument("--conf_threshold", default=0.05, type=float)
+    parser.add_argument("--iou_threshold", default=0.7, type=float)
 
     # Parse the arguments.
     args = parser.parse_args()
