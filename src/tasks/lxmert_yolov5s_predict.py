@@ -300,27 +300,8 @@ class VQA:
             proposal_idx, cls_idx = unravel_index(kept_idx, batch_boxes.shape[:-1])
             proposal_idx = proposal_idx[keep]
             cls_idx = cls_idx[keep]
-            print('conf filtered num={}, iou_num={}'.format(boxesf.shape, keep.shape))
-            # max_conf = torch.zeros_like(one_pred[:, 4])  # [5040]
-            # conf_thresh_tensor = torch.full_like(max_conf, conf_threshold)
-            # start_index = 0
-            # for cls_ind in range(start_index, num_classes):
-            #     cls_scores = one_pred[:, cls_ind + 5]  # 5040
-            #     keep = torch.ops.torchvision.nms(
-            #         boxes, cls_scores, iou_threshold)
-            #     max_conf[keep] = torch.where(
-            #         # Better than max one till now and minimally greater than conf_thresh
-            #         (cls_scores[keep] > max_conf[keep])
-            #         & (cls_scores[keep] > conf_thresh_tensor[keep]),
-            #         cls_scores[keep],
-            #         max_conf[keep],
-            #         )
-            # sorted_scores, sorted_indices = torch.sort(max_conf,
-            #                                            descending=True)
-            # TODO: use >0 to get variable boxes
-            # num_boxes = (sorted_scores != 0).sum()
-            # print('num_boxes: {}'.format(num_boxes))
-            # keep_boxes = sorted_indices[: num_features]
+            # print('conf filtered num={}, iou_num={}'.format(
+            # boxesf.shape, keep.shape))
             # print('img[i].shape', img[i].shape)
             boxes = scale_coords(img[i].shape[1:], boxes, im0[i].shape).round()
             # Normalize the boxes (to 0 ~ 1)
@@ -359,11 +340,11 @@ class VQA:
             if len(feat_list[ns]) > 0:
                 feat_list[ns] = torch.stack(feat_list[ns])
                 info_list[ns] = torch.stack(info_list[ns])
-                print('feat_list size:', feat_list[ns].size())
+                # print('feat_list size:', feat_list[ns].size())
             else:
                 feat_list[ns] = None
                 info_list[ns] = None
-                print('feat_list size:', feat_list[ns])
+                # print('feat_list size:', feat_list[ns])
         return feat_list, info_list
 
     def preprocess_image(self, img_paths):
