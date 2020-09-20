@@ -5,7 +5,7 @@ from pathlib import Path
 _PREDICT_FILE = 'lxmert/src/tasks/lxmert_yolov5s_predict.py'
 _MODELING_FILE = '/home/tx2/work/AcceleratorBERT/lxmert/src/lxrt/modeling.py'
 components = {
-    'predict': _PREDICT_FILE,
+    'real_run': _PREDICT_FILE,
     'preprocess_image': _PREDICT_FILE,
     'run_detection': _PREDICT_FILE,
     'postprocess_feature': _PREDICT_FILE,

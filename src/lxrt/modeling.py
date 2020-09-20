@@ -31,6 +31,7 @@ import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss, SmoothL1Loss
 
+from param import timed
 from .file_utils import cached_path
 
 logger = logging.getLogger(__name__)
@@ -147,9 +148,10 @@ class VisualConfig(object):
         self.l_layers = l_layers
         self.x_layers = x_layers
         self.r_layers = r_layers
-
+        # 128 for s, 192 for m,
+        self.visual_base_dim = int(os.environ.get('VBD', 128))
         self.visual_feat_dim = 2048
-        self.visual_scale_dims = [128, 256, 512]
+        self.visual_scale_dims = [self.visual_base_dim*i for i in [1, 2, 4]]
         self.visual_pos_dim = 4
 
         self.obj_id_num = 1600
@@ -570,6 +572,7 @@ class LXRTEncoder(nn.Module):
             [BertLayer(config) for _ in range(self.num_r_layers)]
         )
 
+    @timed
     def image_encoder(self, visn_feats, visn_attention_mask):
         visn_feats = self.visn_fc(visn_feats)
 
@@ -578,12 +581,14 @@ class LXRTEncoder(nn.Module):
             visn_feats = layer_module(visn_feats, visn_attention_mask)
         return visn_feats
 
+    @timed
     def ques_encoder(self, lang_feats, lang_attention_mask):
         # Run language layers
         for layer_module in self.layer:
             lang_feats = layer_module(lang_feats, lang_attention_mask)
         return lang_feats
 
+    @timed
     def cross_encoder(self, lang_feats, lang_attention_mask,
                       visn_feats, visn_attention_mask):
         # Run cross-modality layers
@@ -1016,7 +1021,7 @@ class LXRTPretraining(BertPreTrainedModel):
             answer_loss = loss_fct(
                 answer_score.view(-1, self.num_answers),
                 ans.view(-1)
-            )  
+            )
             # Since this Github version pre-trains with QA loss from the beginning,
             # I exclude "*2" here to match the effect of QA losses.
             # Previous: (loss *0) for 6 epochs, (loss *2) for 6 epochs.   (Used 10 instead of 6 in EMNLP paper)

@@ -7,6 +7,27 @@ import random
 
 import numpy as np
 import torch
+from collections import defaultdict
+import time
+
+from functools import wraps
+timings = defaultdict(list)
+
+
+def timed(func):
+    """This decorator prints the execution time for the decorated function."""
+    profile = os.environ.get('PROF', False)
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if profile:
+            start = time.time()
+        result = func(*args, **kwargs)
+        if profile:
+            end = time.time()
+            timings[func.__name__].append(end-start)
+        return result
+    return wrapper
 
 
 def get_optimizer(optim):
@@ -93,9 +114,9 @@ def parse_args():
     parser.add_argument("--detection_model", type=str)
     parser.add_argument("--profile_save", type=str)
     parser.add_argument("--img_size", default=320, type=int)
-    parser.add_argument("--num_per_scale_features", default=8, type=int)
+    parser.add_argument("--num_per_scale_features", default=16, type=int)
     parser.add_argument("--conf_threshold", default=0.05, type=float)
-    parser.add_argument("--iou_threshold", default=0.7, type=float)
+    parser.add_argument("--iou_threshold", default=0.5, type=float)
 
     # Parse the arguments.
     args = parser.parse_args()
